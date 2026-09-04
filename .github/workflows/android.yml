@@ -1,30 +1,61 @@
-name: Android debug build
+name: Build arm64 Codio runtime
 
 on:
-  push:
-    branches: ["**"]
-  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  build-runtime:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - name: Set up QEMU for arm64
+        uses: docker/setup-qemu-action@v3
         with:
-          distribution: temurin
-          java-version: "17"
-          cache: gradle
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+          platforms: arm64
+
+      - name: Build arm64 rootfs with OpenCode
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/dist"
+
+          docker run \
+            --platform linux/arm64 \
+            --rm \
+            -v "${GITHUB_WORKSPACE}/dist:/out" \
+            node:20-alpine \
+            sh -euxc '
+              npm install -g opencode-ai
+              opencode --version
+              tar -czf /out/rootfs-arm64-v8a.tar.gz \
+                -C / \
+                bin sbin usr lib etc root
+            '
+
+      - name: Calculate SHA-256
+        id: hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256="$(sha256sum dist/rootfs-arm64-v8a.tar.gz | awk '{print $1}')"
+          echo "sha256=${sha256}" >> "${GITHUB_OUTPUT}"
+          echo "${sha256}  rootfs-arm64-v8a.tar.gz" > dist/SHA256SUMS
+
+      - name: Create runtime release
+        uses: softprops/action-gh-release@v2
         with:
-          gradle-version: "8.7"
-      - name: Build debug APK
-        run: gradle assembleDebug
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: codio-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          tag_name: runtime-${{ github.run_number }}
+          name: Codio runtime ${{ github.run_number }}
+          body: |
+            ARM64 Codio runtime rootfs generated from `node:20-alpine`.
+
+            OpenCode was installed and verified with `opencode --version`.
+
+            SHA-256:
+            `${{ steps.hash.outputs.sha256 }}`
+          files: |
+            dist/rootfs-arm64-v8a.tar.gz
+            dist/SHA256SUMS
