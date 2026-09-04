@@ -1,0 +1,61 @@
+name: Build arm64 Codio runtime
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-runtime:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up QEMU for arm64
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build arm64 rootfs with OpenCode
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/dist"
+
+          docker run \
+            --platform linux/arm64 \
+            --rm \
+            -v "${GITHUB_WORKSPACE}/dist:/out" \
+            node:20-alpine \
+            sh -euxc '
+              npm install -g opencode-ai
+              opencode --version
+              tar -czf /out/rootfs-arm64-v8a.tar.gz \
+                -C / \
+                bin sbin usr lib etc root
+            '
+
+      - name: Calculate SHA-256
+        id: hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256="$(sha256sum dist/rootfs-arm64-v8a.tar.gz | awk '{print $1}')"
+          echo "sha256=${sha256}" >> "${GITHUB_OUTPUT}"
+          echo "${sha256}  rootfs-arm64-v8a.tar.gz" > dist/SHA256SUMS
+
+      - name: Create runtime release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: runtime-${{ github.run_number }}
+          name: Codio runtime ${{ github.run_number }}
+          body: |
+            ARM64 Codio runtime rootfs generated from `node:20-alpine`.
+
+            OpenCode was installed and verified with `opencode --version`.
+
+            SHA-256:
+            `${{ steps.hash.outputs.sha256 }}`
+          files: |
+            dist/rootfs-arm64-v8a.tar.gz
+            dist/SHA256SUMS
