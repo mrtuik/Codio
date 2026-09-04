@@ -35,6 +35,22 @@ class BootstrapManager(private val context: Context) {
 
     suspend fun retry(onProgress: suspend (JSONObject) -> Unit = {}): JSONObject = run(onProgress)
 
+    /**
+     * Reads the last persisted step without starting or changing anything.
+     * If the previous run was killed silently (native crash, OS low-memory
+     * kill) with no Java exception to catch, the state will still read
+     * "running" here because saveStatus() commits to SharedPreferences
+     * synchronously *before* each risky step executes. This is the only way
+     * to localize such a crash without adb/root log access.
+     */
+    fun lastInterruptedStep(): String? {
+        val state = prefs.getString(KEY_STATE, "idle")
+        if (state != "running") return null
+        val index = prefs.getInt(KEY_STEP_INDEX, 0)
+        val name = prefs.getString(KEY_STEP, STEP_NAMES.getOrElse(index) { "unknown" })
+        return "Step ${index + 1}/${STEP_NAMES.size}: $name"
+    }
+
     fun status(): JSONObject {
         val state = prefs.getString(KEY_STATE, "idle").orEmpty()
         return JSONObject()
