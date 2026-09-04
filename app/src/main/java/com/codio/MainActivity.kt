@@ -38,14 +38,17 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        showCrashLogIfAny()
+        val bootstrap = BootstrapManager(this)
+        // Read this before initialize() runs — the first thing initialize()
+        // does when retrying is overwrite this same persisted step.
+        val interruptedStep = bootstrap.lastInterruptedStep()
+        showDiagnosticsIfAny(interruptedStep)
         webView = WebView(this)
         setContentView(webView)
         configureWebView()
         webView.loadUrl("file:///android_asset/codio.html")
 
         lifecycleScope.launch {
-            val bootstrap = BootstrapManager(this@MainActivity)
             try {
                 val result = bootstrap.initialize { status -> emitBootstrap(status) }
                 emitBootstrap(result)
@@ -71,19 +74,34 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showCrashLogIfAny() {
-        val log = CodioApplication.latestCrashLog(this) ?: return
+    private fun showDiagnosticsIfAny(interruptedStep: String?) {
+        val crashLog = CodioApplication.latestCrashLog(this)
+        if (crashLog == null && interruptedStep == null) return
+
+        val message = buildString {
+            if (interruptedStep != null) {
+                append("The previous run never finished. It was last known to be on:\n\n")
+                append(interruptedStep)
+                append("\n\nNo exception was caught for this, which usually means the app ")
+                append("process was killed directly (often low memory) rather than crashing ")
+                append("with a Java error.\n")
+            }
+            if (crashLog != null) {
+                if (interruptedStep != null) append("\n---\n\n")
+                append(crashLog)
+            }
+        }
         val textView = TextView(this).apply {
-            text = log
+            text = message
             setPadding(32, 32, 32, 32)
             setTextIsSelectable(true)
         }
         AlertDialog.Builder(this)
-            .setTitle("Codio crashed last time")
+            .setTitle("Codio didn't finish last time")
             .setView(ScrollView(this).apply { addView(textView) })
             .setPositiveButton("Copy") { _, _ ->
                 val clipboard = getSystemService(ClipboardManager::class.java)
-                clipboard.setPrimaryClip(ClipData.newPlainText("Codio crash log", log))
+                clipboard.setPrimaryClip(ClipData.newPlainText("Codio diagnostics", message))
                 CodioApplication.clearCrashLogs(this)
             }
             .setNegativeButton("Dismiss") { _, _ ->
