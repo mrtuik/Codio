@@ -1,61 +1,56 @@
-name: Build arm64 Codio runtime
+name: Build OpenCode runtime rootfs
 
 on:
   workflow_dispatch:
+    inputs:
+      opencode_package:
+        description: "npm package name for opencode"
+        required: false
+        default: "opencode-ai"
 
 permissions:
   contents: write
 
 jobs:
-  build-runtime:
+  build-arm64:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Set up QEMU for arm64
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
-      - name: Build arm64 rootfs with OpenCode
-        shell: bash
+      - name: Build rootfs with opencode preinstalled (arm64-v8a)
         run: |
-          set -euo pipefail
-          mkdir -p "${GITHUB_WORKSPACE}/dist"
-
-          docker run \
-            --platform linux/arm64 \
-            --rm \
-            -v "${GITHUB_WORKSPACE}/dist:/out" \
-            node:20-alpine \
-            sh -euxc '
-              npm install -g opencode-ai
-              opencode --version
+          mkdir -p out
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/out:/out" \
+            node:20-alpine sh -c "
+              set -e
+              npm install -g ${{ inputs.opencode_package || 'opencode-ai' }} &&
+              opencode --version &&
               tar -czf /out/rootfs-arm64-v8a.tar.gz \
-                -C / \
-                bin sbin usr lib etc root
-            '
+                --exclude='proc/*' --exclude='sys/*' --exclude='dev/*' \
+                -C / bin sbin usr lib etc root home opt 2>/dev/null || \
+              tar -czf /out/rootfs-arm64-v8a.tar.gz -C / bin sbin usr lib etc root
+            "
 
-      - name: Calculate SHA-256
-        id: hash
-        shell: bash
+      - name: Compute SHA-256
+        id: sha
         run: |
-          set -euo pipefail
-          sha256="$(sha256sum dist/rootfs-arm64-v8a.tar.gz | awk '{print $1}')"
-          echo "sha256=${sha256}" >> "${GITHUB_OUTPUT}"
-          echo "${sha256}  rootfs-arm64-v8a.tar.gz" > dist/SHA256SUMS
+          HASH=$(sha256sum out/rootfs-arm64-v8a.tar.gz | cut -d' ' -f1)
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "arm64-v8a sha256: $HASH"
 
-      - name: Create runtime release
+      - name: Upload as GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: runtime-${{ github.run_number }}
-          name: Codio runtime ${{ github.run_number }}
+          name: OpenCode runtime ${{ github.run_number }}
           body: |
-            ARM64 Codio runtime rootfs generated from `node:20-alpine`.
+            arm64-v8a rootfs (Alpine + Node.js + opencode preinstalled)
+            SHA-256: ${{ steps.sha.outputs.hash }}
 
-            OpenCode was installed and verified with `opencode --version`.
-
-            SHA-256:
-            `${{ steps.hash.outputs.sha256 }}`
-          files: |
-            dist/rootfs-arm64-v8a.tar.gz
-            dist/SHA256SUMS
+            Copy the asset download URL below plus this SHA-256 into
+            app/src/main/assets/runtime-manifest.json under "arm64-v8a".
+          files: out/rootfs-arm64-v8a.tar.gz
