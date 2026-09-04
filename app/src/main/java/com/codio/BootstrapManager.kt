@@ -229,9 +229,11 @@ class BootstrapManager(private val context: Context) {
     }
 
     private fun installOpenCode(manifest: JSONObject) {
-        val packageName = manifest.getString("package")
-        require(packageName.matches(Regex("[a-zA-Z0-9._@/-]+"))) { "Invalid OpenCode package name" }
-        runProot("/bin/sh", "-c", "npm install -g $packageName")
+        // opencode-ai is already installed inside the rootfs archive itself
+        // (baked in during the CI runtime build). Re-running npm install on
+        // the device here was redundant network+CPU+RAM work under proot and
+        // is the likely cause of low-memory crashes right after extraction.
+        // Only verify the pre-installed binary responds.
         val verified = runProot("opencode", "--version")
         if (verified.exitCode != 0) throw IOException("OpenCode verification failed: ${verified.output}")
         runtime.markVersion(verified.output.lineSequence().firstOrNull()?.trim().orEmpty())
