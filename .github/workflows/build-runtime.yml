@@ -8,14 +8,9 @@ permissions:
 
 jobs:
   build-runtime:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
 
     steps:
-      - name: Set up QEMU for arm64
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - name: Build arm64 rootfs with OpenCode
         shell: bash
         run: |
