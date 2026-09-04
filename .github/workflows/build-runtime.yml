@@ -28,9 +28,10 @@ jobs:
             -v "${GITHUB_WORKSPACE}/dist:/out" \
             node:20-alpine \
             sh -euxc '
+              apk add --no-cache tar
               npm install -g opencode-ai
               opencode --version
-              tar -czf /out/rootfs-arm64-v8a.tar.gz \
+              tar --hard-dereference -czf /out/rootfs-arm64-v8a.tar.gz \
                 -C / \
                 bin sbin usr lib etc root
             '
