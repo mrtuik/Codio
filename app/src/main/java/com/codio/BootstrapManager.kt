@@ -1,6 +1,7 @@
 package com.codio
 
 import android.content.Context
+import android.os.PowerManager
 import android.os.StatFs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +25,10 @@ class BootstrapManager(private val context: Context) {
     private val files = FileManager(context)
     private val runtime = RuntimeManager(context, files)
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val wakeLock by lazy {
+        (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Codio:bootstrap")
+    }
 
     suspend fun initialize(onProgress: suspend (JSONObject) -> Unit = {}): JSONObject {
         if (runtime.bootstrapComplete()) {
@@ -73,6 +78,14 @@ class BootstrapManager(private val context: Context) {
                 return@withLock status()
             }
             try {
+                // Held for the whole bootstrap so the OS doesn't treat the
+                // process as idle/killable while extraction and opencode
+                // verification block below (both are native process calls
+                // that used to run on the caller's dispatcher, i.e. the
+                // main thread, with no protection — that's what caused the
+                // silent low-memory-style kills at "Extracting").
+                wakeLock.acquire(10 * 60 * 1000L)
+
                 step(0, "Preparing storage", onProgress)
                 files.codioRoot.mkdirs()
                 File(files.codioRoot, "Runtime/rootfs").mkdirs()
@@ -82,10 +95,10 @@ class BootstrapManager(private val context: Context) {
                 val archive = downloadRootfs(manifest, onProgress)
 
                 step(2, "Extracting", onProgress)
-                extractArchive(archive)
+                withContext(Dispatchers.IO) { extractArchive(archive) }
 
                 step(3, "Installing opencode", onProgress)
-                installOpenCode(manifest)
+                withContext(Dispatchers.IO) { installOpenCode(manifest) }
 
                 step(4, "Starting server", onProgress)
                 runtime.setBootstrapComplete(true)
@@ -108,6 +121,8 @@ class BootstrapManager(private val context: Context) {
                     error.message ?: "Bootstrap failed"
                 )
                 throw error
+            } finally {
+                if (wakeLock.isHeld) wakeLock.release()
             }
         }
 
