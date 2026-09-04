@@ -1,52 +1,59 @@
-name: Android CI
+name: Android debug build
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches: ["**"]
   pull_request:
-    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          distribution: temurin
+          java-version: "17"
           cache: gradle
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
 
-      - name: Build with Gradle (Debug)
-        run: ./gradlew assembleDebug --no-daemon
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
 
-      - name: Prepare APK for Release
+      - name: Rename output
         run: |
-          mkdir -p release-apk
-          cp app/build/outputs/apk/debug/app-debug.apk release-apk/Codio.apk
+          mkdir -p gitpush-out
+          FILE=$(ls -1 app/build/outputs/apk/debug/*.apk 2>/dev/null | head -n 1)
+          if [ -z "$FILE" ]; then echo "No APK found in app/build/outputs/apk/debug" && exit 1; fi
+          cp "$FILE" "gitpush-out/Codio.apk"
 
-      - name: Upload Build Artifact
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Codio-debug-apk
-          path: release-apk/Codio.apk
+          name: codio-debug-apk
+          path: gitpush-out/Codio.apk
+          if-no-files-found: error
 
       - name: Create GitHub Release
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/heads/')
         with:
           tag_name: v1.0.${{ github.run_number }}
           name: Codio build ${{ github.run_number }}
-          files: release-apk/Codio.apk
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: gitpush-out/Codio.apk
+          generate_release_notes: true
