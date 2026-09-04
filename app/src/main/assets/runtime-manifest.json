@@ -1,4 +1,6 @@
 {
-  "url": "https://github.com/mrtuik/Codio/releases/download/runtime-4/rootfs-arm64-v8a.tar.gz",
-  "sha256": "a5b4c1278f84364aab5874fa16fb18bb25576a1d8439ee8aca9bccccb97f9ec6"
+  "arm64-v8a": {
+    "url": "https://github.com/mrtuik/Codio/releases/download/runtime-4/rootfs-arm64-v8a.tar.gz",
+    "sha256": "a5b4c1278f84364aab5874fa16fb18bb25576a1d8439ee8aca9bccccb97f9ec6"
+  }
 }
