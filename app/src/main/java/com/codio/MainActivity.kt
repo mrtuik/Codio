@@ -6,11 +6,16 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Build
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.os.Bundle
 import android.os.IBinder
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.ScrollView
+import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -33,6 +38,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        showCrashLogIfAny()
         webView = WebView(this)
         setContentView(webView)
         configureWebView()
@@ -63,6 +69,28 @@ class MainActivity : AppCompatActivity() {
                 )
             }
         }
+    }
+
+    private fun showCrashLogIfAny() {
+        val log = CodioApplication.latestCrashLog(this) ?: return
+        val textView = TextView(this).apply {
+            text = log
+            setPadding(32, 32, 32, 32)
+            setTextIsSelectable(true)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Codio crashed last time")
+            .setView(ScrollView(this).apply { addView(textView) })
+            .setPositiveButton("Copy") { _, _ ->
+                val clipboard = getSystemService(ClipboardManager::class.java)
+                clipboard.setPrimaryClip(ClipData.newPlainText("Codio crash log", log))
+                CodioApplication.clearCrashLogs(this)
+            }
+            .setNegativeButton("Dismiss") { _, _ ->
+                CodioApplication.clearCrashLogs(this)
+            }
+            .setCancelable(false)
+            .show()
     }
 
     private fun startRuntimeService() {
