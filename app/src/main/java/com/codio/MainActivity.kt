@@ -128,7 +128,28 @@ class MainActivity : AppCompatActivity() {
             builtInZoomControls = false
             displayZoomControls = false
         }
-        webView.webViewClient = WebViewClient()
+        webView.webViewClient = object : WebViewClient() {
+            override fun onRenderProcessGone(
+                view: WebView?,
+                detail: android.webkit.RenderProcessGoneDetail?
+            ): Boolean {
+                try {
+                    val dir = java.io.File(filesDir, "crash_logs").apply { mkdirs() }
+                    val stamp = java.text.SimpleDateFormat(
+                        "yyyy-MM-dd_HH-mm-ss", java.util.Locale.US
+                    ).format(java.util.Date())
+                    java.io.File(dir, "crash-$stamp.txt").writeText(
+                        "WebView renderer process gone.\n" +
+                            "didCrash=${detail?.didCrash()}\n" +
+                            "rendererPriorityAtExit=${detail?.rendererPriorityAtExit()}"
+                    )
+                } catch (_: Throwable) {
+                    // Never let logging the renderer crash cause another crash.
+                }
+                finish()
+                return true
+            }
+        }
         webView.webChromeClient = WebChromeClient()
         webView.addJavascriptInterface(
             WebBridge(
