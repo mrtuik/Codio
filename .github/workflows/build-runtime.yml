@@ -31,9 +31,34 @@ jobs:
               apk add --no-cache tar
               npm install -g opencode-ai
               opencode --version
+
+              # Alpine now merges /bin, /sbin, /lib into /usr/* and leaves
+              # ABSOLUTE symlinks behind (e.g. /bin -> /usr/bin). That works
+              # fine on the real root filesystem, but once this rootfs is
+              # extracted somewhere else on-device (proot, not real /),
+              # the absolute symlink points at the *phones* /usr/bin
+              # instead of the extracted one, and /bin/sh disappears.
+              # Rewrite any absolute top-level symlinks to relative ones so
+              # the archive still works no matter where it lands.
+              for d in bin sbin lib; do
+                if [ -L "/$d" ]; then
+                  target="$(readlink "/$d")"
+                  case "$target" in
+                    /*) rm "/$d"; ln -s "${target#/}" "/$d" ;;
+                  esac
+                fi
+              done
+
               tar --hard-dereference -czf /out/rootfs-arm64-v8a.tar.gz \
                 -C / \
                 bin sbin usr lib etc root
+
+              # Simulate on-device extraction (a different root than the
+              # real one) and fail the build here instead of shipping a
+              # broken archive.
+              mkdir -p /tmp/verify
+              tar -xzf /out/rootfs-arm64-v8a.tar.gz -C /tmp/verify
+              test -e /tmp/verify/bin/sh || (echo "bin/sh missing after simulated extraction" >&2; exit 1)
             '
 
       - name: Calculate SHA-256
