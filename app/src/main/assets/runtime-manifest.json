@@ -2,8 +2,8 @@
   "version": "0.1.0",
   "opencodePackage": "opencode-ai",
   "arm64-v8a": {
-    "url": "https://github.com/mrtuik/Codio/releases/download/runtime-3/rootfs-arm64-v8a.tar.gz",
-    "sha256": "f4f52df07d0fb201f48a3945d5022fcceaa52ec174b6abab287117e611c19f38"
+    "url": "https://github.com/mrtuik/Codio/releases/download/runtime-5/rootfs-arm64-v8a.tar.gz",
+    "sha256": "92101ff9ceadf0ede9c6d1a8a002cef172fb179ff96f1aaab137651a656d3742"
   },
   "armeabi-v7a": {
     "url": "",
