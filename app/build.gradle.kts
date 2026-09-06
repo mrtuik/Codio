@@ -13,6 +13,20 @@ android {
         targetSdk = 35
         versionCode = (project.findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 1
         versionName = (project.findProperty("appVersionName") as String?) ?: "1.0.0"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
+    }
+
+    // proot .so files must be extracted to nativeLibraryDir as real, executable
+    // files. Without legacy packaging AGP 8 keeps them compressed inside the APK
+    // and RuntimeManager.prootBinary() reports "Bundled proot is missing".
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += listOf("**/libproot.so", "**/libproot_loader.so")
+        }
     }
 
     buildTypes {
