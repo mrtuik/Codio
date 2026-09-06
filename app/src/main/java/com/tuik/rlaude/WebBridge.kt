@@ -70,6 +70,9 @@ class WebBridge(
     fun getProjects(): String = call { files.projects() }
 
     @JavascriptInterface
+    fun ensureDefaultProject(): String = call { files.ensureDefaultProject() }
+
+    @JavascriptInterface
     fun createProject(request: String): String = call {
         val json = JSONObject(request)
         files.createProject(
@@ -246,6 +249,21 @@ class WebBridge(
         val output = process.inputStream.bufferedReader().readText().take(100_000)
         process.waitFor()
         JSONObject().put("exitCode", process.exitValue()).put("output", output)
+    }
+
+    @JavascriptInterface
+    fun getModelConfig(): String = call { runtime.modelConfig() }
+
+    @JavascriptInterface
+    fun setModelConfig(request: String): String = call {
+        val json = JSONObject(request)
+        runtime.setModelConfig(
+            json.getString("provider"),
+            json.optString("model", ""),
+            json.optString("apiKey", "").ifBlank { null }
+        )
+        scope.launch { emit("runtime", openCode.restart()) }
+        JSONObject().put("saved", true)
     }
 
     @JavascriptInterface
