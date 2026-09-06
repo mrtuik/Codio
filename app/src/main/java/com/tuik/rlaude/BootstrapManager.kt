@@ -10,14 +10,20 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import java.util.stream.Collectors
+import java.util.zip.GZIPInputStream
 
 /**
  * Installs the data rootfs and npm package without ever executing a downloaded
@@ -215,33 +221,29 @@ class BootstrapManager(private val context: Context) {
         }
     }
 
+    /**
+     * Extracts the runtime archive with an in-process tar reader instead of
+     * /system/bin/tar. Toybox/BSD tar builds differ between devices and reject
+     * archives GNU tar produced (pax headers, entry ordering), which surfaced
+     * as "Runtime archive failed safety validation" on the Extracting step.
+     * The same safety rules still apply: no absolute paths and no entries
+     * escaping the rootfs directory.
+     */
     private fun extractArchive(archive: File) {
         val rootfs = runtime.rootfsDirectory()
         rootfs.deleteRecursively()
         rootfs.mkdirs()
-        val listing = ProcessBuilder("/system/bin/tar", "-tzf", archive.absolutePath)
-            .redirectErrorStream(true).start()
-        var unsafeEntry = false
-        listing.inputStream.bufferedReader().useLines { lines ->
-            lines.forEach { name ->
-                if (name.startsWith("/") || name.split("/").contains("..")) {
-                    unsafeEntry = true
+        val root = rootfs.canonicalFile.toPath()
+        archive.inputStream().buffered(256 * 1024).use { raw ->
+            GZIPInputStream(raw).use { gzip ->
+                TarArchiveInputStream(gzip).use { tar ->
+                    var entry = tar.nextEntry
+                    while (entry != null) {
+                        extractEntry(tar, entry, root)
+                        entry = tar.nextEntry
+                    }
                 }
             }
-        }
-        if (!listing.waitFor(60, TimeUnit.SECONDS)) {
-            listing.destroyForcibly()
-            throw IOException("Runtime archive listing timed out")
-        }
-        if (listing.exitValue() != 0 || unsafeEntry) {
-            throw IOException("Runtime archive failed safety validation")
-        }
-        val extract = ProcessBuilder(
-            "/system/bin/tar", "-xzf", archive.absolutePath, "-C", rootfs.absolutePath
-        ).redirectErrorStream(true).start()
-        val output = readLimited(extract.inputStream, 2_000)
-        if (!extract.waitFor(120, TimeUnit.SECONDS) || extract.exitValue() != 0) {
-            throw IOException("Runtime extraction failed: $output")
         }
         repairAbsoluteSymlinks(rootfs)
         val shell = File(rootfs, "bin/sh")
@@ -255,6 +257,36 @@ class BootstrapManager(private val context: Context) {
             }.getOrNull()
             val detail = target?.let { " (link target: $it)" }.orEmpty()
             throw IOException("Rootfs is missing /bin/sh$detail")
+        }
+    }
+
+    private fun extractEntry(input: TarArchiveInputStream, entry: TarArchiveEntry, root: Path) {
+        val name = entry.name
+        val target = root.resolve(name).normalize()
+        if (name.startsWith("/") || !target.startsWith(root)) {
+            throw IOException("Runtime archive failed safety validation")
+        }
+        when {
+            entry.isDirectory -> Files.createDirectories(target)
+            entry.isSymbolicLink -> {
+                Files.createDirectories(target.parent)
+                Files.deleteIfExists(target)
+                Files.createSymbolicLink(target, Paths.get(entry.linkName))
+            }
+            entry.isLink -> {
+                val linkSource = root.resolve(entry.linkName).normalize()
+                if (linkSource.startsWith(root) && Files.exists(linkSource)) {
+                    Files.createDirectories(target.parent)
+                    Files.copy(linkSource, target, StandardCopyOption.REPLACE_EXISTING)
+                }
+            }
+            else -> {
+                Files.createDirectories(target.parent)
+                Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING)
+                if (entry.mode and 0o111 != 0) {
+                    target.toFile().setExecutable(true, false)
+                }
+            }
         }
     }
 
@@ -286,20 +318,6 @@ class BootstrapManager(private val context: Context) {
         }
     }
 
-    private fun readLimited(input: java.io.InputStream, limit: Int): String {
-        val result = StringBuilder()
-        val buffer = ByteArray(1024)
-        input.use {
-            var read = it.read(buffer)
-            while (read >= 0) {
-                if (read > 0 && result.length < limit) {
-                    result.append(String(buffer, 0, minOf(read, limit - result.length)))
-                }
-                read = it.read(buffer)
-            }
-        }
-        return result.toString()
-    }
 
     private fun installOpenCode(manifest: JSONObject) {
         // opencode-ai is already installed inside the rootfs archive itself
