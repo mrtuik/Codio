@@ -9,6 +9,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /**
@@ -49,7 +50,7 @@ class RuntimeManager(private val context: Context, private val files: FileManage
 
     fun status(): JSONObject {
         val installed = bootstrapComplete() && rootfs.isDirectory && prootBinary().canExecute()
-        val running = process?.isAlive == true || prefs.getBoolean(KEY_RUNTIME_RUNNING, false)
+        val running = process?.isAlive == true
         return JSONObject()
             .put("installed", installed)
             .put("bootstrapComplete", bootstrapComplete())
@@ -79,9 +80,10 @@ class RuntimeManager(private val context: Context, private val files: FileManage
     }
 
     suspend fun start(): JSONObject = withContext(Dispatchers.IO) {
-        if (process?.isAlive == true || prefs.getBoolean(KEY_RUNTIME_RUNNING, false)) {
+        if (process?.isAlive == true) {
             return@withContext status().put("started", false)
         }
+        prefs.edit().putBoolean(KEY_RUNTIME_RUNNING, false).apply()
         if (!bootstrapComplete()) {
             return@withContext status().put("started", false).put("reason", "Runtime bootstrap is incomplete")
         }
@@ -94,7 +96,9 @@ class RuntimeManager(private val context: Context, private val files: FileManage
         }
         writeModelFilesIntoRootfs()
         ensureZenAuth()
-        val serverCommand = "opencode serve --hostname 127.0.0.1 --port $port --print"
+        // --print is not a valid `serve` option in the bundled OpenCode CLI;
+        // it prints command help (ending at --cors) and exits instead of binding.
+        val serverCommand = "opencode serve --hostname 127.0.0.1 --port $port"
         process = ProcessBuilder(
             proot.absolutePath,
             "--link2symlink", "-0",
@@ -139,9 +143,9 @@ class RuntimeManager(private val context: Context, private val files: FileManage
     }
 
     fun modelConfig(): JSONObject = JSONObject()
-        .put("provider", prefs.getString(KEY_MODEL_PROVIDER, "").orEmpty())
+        .put("provider", prefs.getString(KEY_MODEL_PROVIDER, ZEN_PROVIDER).orEmpty().ifBlank { ZEN_PROVIDER })
         .put("model", prefs.getString(KEY_MODEL_ID, "").orEmpty())
-        .put("hasApiKey", !secureStorage.get(KEY_API_KEY).isNullOrBlank())
+        .put("hasApiKey", prefs.getString(KEY_MODEL_PROVIDER, ZEN_PROVIDER) != ZEN_PROVIDER && !secureStorage.get(KEY_API_KEY).isNullOrBlank())
 
     /**
      * Mirrors what `opencode auth login` + a hand-edited opencode.json would do.
@@ -167,19 +171,18 @@ class RuntimeManager(private val context: Context, private val files: FileManage
     }
 
     private fun writeModelFilesIntoRootfs() {
-        val provider = prefs.getString(KEY_MODEL_PROVIDER, "").orEmpty()
-        if (provider.isBlank() || !rootfs.isDirectory) return
+        val provider = prefs.getString(KEY_MODEL_PROVIDER, ZEN_PROVIDER).orEmpty().ifBlank { ZEN_PROVIDER }
+        if (!rootfs.isDirectory) return
         val model = prefs.getString(KEY_MODEL_ID, "").orEmpty()
         val isZen = provider == ZEN_PROVIDER
-        val apiKey = if (isZen) secureStorage.get(KEY_ZEN_KEY) else secureStorage.get(KEY_API_KEY)
+        val apiKey = if (isZen) null else secureStorage.get(KEY_API_KEY)
         runCatching {
             val configDir = File(rootfs, "root/.config/opencode").apply { mkdirs() }
             val config = JSONObject()
             if (model.isNotBlank()) config.put("model", "$provider/$model")
             File(configDir, "opencode.json").writeText(config.toString(2))
-            // For OpenCode Zen we never write auth.json from a user-entered key.
-            // Either `opencode auth login` created it, or a silently cached Zen
-            // key (from the /connect flow) is written below.
+            // Zen owns its auth file through the CLI; never synthesize it from
+            // the manual API-key field.
             if (!apiKey.isNullOrBlank()) {
                 val authDir = File(rootfs, "root/.local/share/opencode").apply { mkdirs() }
                 val auth = JSONObject().put(provider, JSONObject().put("type", "api").put("key", apiKey))
@@ -196,38 +199,20 @@ class RuntimeManager(private val context: Context, private val files: FileManage
      * the user is never asked to paste anything.
      */
     fun ensureZenAuth() {
-        if (prefs.getString(KEY_MODEL_PROVIDER, "") != ZEN_PROVIDER) return
+        if (prefs.getString(KEY_MODEL_PROVIDER, ZEN_PROVIDER).orEmpty().ifBlank { ZEN_PROVIDER } != ZEN_PROVIDER) return
         if (prefs.getBoolean(KEY_ZEN_AUTH_DONE, false)) return
         if (!rootfs.isDirectory || !prootBinary().canExecute()) return
-        val output = runInRootfs(
-            "opencode auth login --provider $ZEN_PROVIDER --non-interactive </dev/null 2>&1 || " +
-                "opencode auth login $ZEN_PROVIDER </dev/null 2>&1"
-        )
+        val output = runInRootfs("opencode auth login --provider $ZEN_PROVIDER --non-interactive </dev/null 2>&1", 8_000)
         prefs.edit().putString(KEY_LAST_OUTPUT, redact(output).takeLast(500)).apply()
 
         val authFile = File(rootfs, "root/.local/share/opencode/auth.json")
-        val loggedIn = authFile.isFile && authFile.readText().contains(ZEN_PROVIDER)
-        if (!loggedIn) {
-            // Fall back to the documented /connect style key issuance and cache
-            // the resulting key silently.
-            val key = Regex("(?i)\\b(oc_[A-Za-z0-9_\\-]{16,}|sk-[A-Za-z0-9_\\-]{16,})").find(output)?.value
-            if (!key.isNullOrBlank()) {
-                secureStorage.put(KEY_ZEN_KEY, key)
-                runCatching {
-                    val authDir = File(rootfs, "root/.local/share/opencode").apply { mkdirs() }
-                    val auth = JSONObject().put(ZEN_PROVIDER, JSONObject().put("type", "api").put("key", key))
-                    authFile.parentFile?.mkdirs()
-                    File(authDir, "auth.json").writeText(auth.toString(2))
-                }
-            } else {
-                // Zen free tier works without credentials; don't block startup.
-                setLastError(null)
-            }
-        }
+        // Free Zen models can run without a manually supplied credential. If
+        // this CLI version created auth.json, retain it; otherwise don't block.
+        if (!authFile.isFile) setLastError(null)
         prefs.edit().putBoolean(KEY_ZEN_AUTH_DONE, true).apply()
     }
 
-    private fun runInRootfs(command: String, timeoutMs: Long = 45_000): String = runCatching {
+    private fun runInRootfs(command: String, timeoutMs: Long = 8_000): String = runCatching {
         val proc = ProcessBuilder(
             prootBinary().absolutePath,
             "--link2symlink", "-0",
@@ -245,10 +230,15 @@ class RuntimeManager(private val context: Context, private val files: FileManage
                 environment()["PROOT_TMP_DIR"] = context.cacheDir.absolutePath
             }
             .start()
-        val text = proc.inputStream.bufferedReader().use { it.readText() }
-        runCatching { proc.waitFor() }
-        proc.destroy()
-        text
+        val output = StringBuilder()
+        val reader = thread(isDaemon = true) {
+            proc.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { line -> if (output.length < 2_000) output.appendLine(line) }
+            }
+        }
+        if (!proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) proc.destroyForcibly()
+        reader.join(500)
+        output.toString()
     }.getOrElse { it.message.orEmpty() }
 
     suspend fun installFromFile(source: File, expectedSha256: String): JSONObject = withContext(Dispatchers.IO) {
@@ -292,7 +282,6 @@ class RuntimeManager(private val context: Context, private val files: FileManage
         private const val KEY_MODEL_PROVIDER = "model_provider"
         private const val KEY_MODEL_ID = "model_id"
         private const val KEY_API_KEY = "model_api_key"
-        private const val KEY_ZEN_KEY = "zen_api_key"
         private const val KEY_ZEN_AUTH_DONE = "zen_auth_done"
         private const val ZEN_PROVIDER = "opencode"
     }
