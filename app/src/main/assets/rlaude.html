@@ -25,6 +25,7 @@
     button { border:0; cursor:pointer }
     .app { height:100%; display:flex; position:relative }
     .sidebar { width:282px; flex:none; border-right:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; padding:18px 13px; z-index:10 }
+    .sidebar-backdrop { display:none }
     .brand { display:flex; align-items:center; gap:10px; padding:4px 10px 24px; font-weight:700; letter-spacing:-.04em; font-size:19px }
     .brand-mark { width:29px; height:29px; border-radius:9px; background:#000; display:grid; place-items:center; color:#fff; overflow:hidden }
     .brand-mark svg { width:23px; height:23px }
@@ -178,14 +179,17 @@
     .modal-foot { display:flex; justify-content:flex-end; gap:8px; margin-top:18px }
     .toast { position:fixed; bottom:20px; left:50%; transform:translate(-50%,20px); opacity:0; pointer-events:none; z-index:50; background:var(--panel-3); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:10px 13px; font-size:11px; transition:.2s; box-shadow:var(--shadow) }.toast.show { opacity:1; transform:translate(-50%,0) }
     @media (max-width:720px) {
-      .sidebar { position:fixed; inset:0 auto 0 0; width:282px; transform:translateX(-100%); transition:transform .2s; box-shadow:var(--shadow) }
+      .sidebar { position:fixed; inset:0 auto 0 0; width:282px; transform:translateX(-100%); transition:transform .22s ease; box-shadow:var(--shadow); z-index:11 }
       .sidebar.open { transform:translateX(0) }.menu-button { display:grid }.topbar { padding:0 15px }.wrap { padding:25px 16px 55px }.home-wrap { padding-top:70px }
       .chat-composer { left:0; padding:11px 12px 15px }.top-actions .icon-button:first-child { display:none }.stat-cards { grid-template-columns:1fr 1fr }.stat-card:last-child { grid-column:span 2 }
+      .sidebar-backdrop { display:block; position:fixed; inset:0; background:rgba(10,12,16,.5); backdrop-filter:blur(1px); z-index:9; opacity:0; pointer-events:none; transition:opacity .22s ease }
+      .sidebar-backdrop.open { opacity:1; pointer-events:auto }
     }
   </style>
 </head>
 <body>
 <div class="app">
+  <div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleMenu()"></div>
   <aside class="sidebar" id="sidebar">
     <div class="brand"><span class="brand-mark"><svg viewBox="0 0 24 24" aria-label="Rlaude logo"><path d="M4 4h16v16h-6.3l-4.85-4.85V20H4z" fill="currentColor"/><path d="M8.85 8.85h6.3v6.3h-6.3z" fill="#000"/></svg></span>Rlaude</div>
     <button class="new-chat" onclick="newChat()">+ New chat</button>
@@ -316,9 +320,10 @@
     const names={home:'Rlaude',chat:'Chat',projects:'Projects',files:'Files',editor:'Editor',terminal:'Terminal',git:'Git',settings:'Settings',diagnostics:'Diagnostics'};
     $('crumb').innerHTML='<strong>'+names[screen]+'</strong>';
     $('sidebar').classList.remove('open');
+    $('sidebar-backdrop').classList.remove('open');
     if(screen==='projects') renderProjects(); if(screen==='files') renderFiles(); if(screen==='git') refreshGit(); if(screen==='diagnostics') loadDiagnostics(); if(screen==='settings') loadModelConfig();
   }
-  function toggleMenu(){ $('sidebar').classList.toggle('open') }
+  function toggleMenu(){ const open=$('sidebar').classList.toggle('open'); $('sidebar-backdrop').classList.toggle('open',open) }
   function toast(message){ const el=$('toast'); el.textContent=message; el.classList.add('show'); clearTimeout(window._toast); window._toast=setTimeout(()=>el.classList.remove('show'),2400) }
   function quick(text){ $('home-input').value=text; $('home-input').focus() }
   function composerKey(e,id){ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendFrom(id)} }
