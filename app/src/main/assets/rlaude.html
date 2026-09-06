@@ -286,13 +286,19 @@
       const display = extractReplyText(result && result.body);
       appendMessage('ai', display);
       loadRuntime();
-      if (sid) { bridge('saveAssistantReply', {sessionId:sid, projectId:state.project?.id||'', text:display}); loadChatSessions(); }
+      // A brand-new chat gets its real session id only once the server
+      // creates it and this event arrives — the synchronous sendMessage
+      // return had none yet. Pick it up here so the *next* message in this
+      // chat is recognized as a continuation instead of starting another
+      // new chat.
+      if (sid) { state.sessionId = sid; bridge('saveAssistantReply', {sessionId:sid, projectId:state.project?.id||'', text:display}); loadChatSessions(); }
     } else if (event.type === 'error') {
       const sid = event.payload && event.payload.sessionId;
       state.pending = false; renderPending();
       const display = '**Request failed:** ' + (event.payload.message || 'Unknown error');
       appendMessage('ai', display);
       loadRuntime();
+      if (sid) state.sessionId = sid;
       if (sid) { bridge('saveAssistantReply', {sessionId:sid, projectId:state.project?.id||'', text:display}); loadChatSessions(); }
     } else if (event.type === 'runtime') { loadRuntime(); }
     else if (event.type === 'fileAttached') {
