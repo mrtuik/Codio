@@ -38,10 +38,14 @@ jobs:
               # That works on the real root filesystem, but once this rootfs
               # is extracted under the app's private directory and launched
               # through proot, /bin/sh resolves against the phone's /bin.
-              # Rewrite every absolute symlink in the archive to a relative
-              # link, not just the three top-level directories.
+              # Rewrite executable-path absolute symlinks in the archive to
+              # relative links. The app performs the same repair across the
+              # complete extracted rootfs, including protected certificate
+              # paths, before it starts the runtime.
               cd /
-              find bin sbin lib usr etc root -type l -print | while IFS= read -r link; do
+              find bin sbin lib usr \
+                \( -path 'usr/lib/ssl' -o -path 'usr/lib/ssl/*' \) -prune -o \
+                -type l -print | while IFS= read -r link; do
                 target="$(readlink "$link")"
                 case "$target" in
                   /*)
