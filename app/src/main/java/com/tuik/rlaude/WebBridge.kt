@@ -157,19 +157,39 @@ class WebBridge(
             val projectId = json.getString("projectId")
             val text = json.getString("text")
             val requestId = json.optString("requestId", System.currentTimeMillis().toString())
-            val sessionId = json.optString("sessionId").ifBlank { null } ?: currentSession ?: UUID.randomUUID().toString()
-            currentSession = sessionId
-            chatStore.appendMessage(sessionId, projectId, "user", text)
+            // "New chat" sends {sessionId: null} from JS. org.json's optString()
+            // turns a genuine JSON null into the literal 4-character string
+            // "null" instead of "" — so the old `.ifBlank { null }` check never
+            // caught it. Worse, this method used to invent its own UUID for a
+            // brand-new chat and pass that non-null id straight to
+            // OpenCodeManager, which only calls createSession() when it's
+            // handed null — so a client-made-up id (or the literal "null")
+            // was POSTed straight to a session the server never created. That
+            // combination is why replies always came back empty and every
+            // "New chat" collapsed into one chat in the sidebar. Now: only
+            // treat a session as "known" when we actually have a real one,
+            // and let the server mint the id for a genuinely new chat.
+            val requestedSession = json.optString("sessionId").takeUnless { it.isBlank() || it == "null" }
+            val knownSession = requestedSession ?: currentSession
             scope.launch {
                 try {
-                    val result = openCode.sendMessage(sessionId, projectId, text)
-                    currentSession = result.optString("sessionId").ifBlank { currentSession }
+                    val result = openCode.sendMessage(knownSession, projectId, text)
+                    val sessionId = result.optString("sessionId").takeUnless { it.isBlank() || it == "null" }
+                        ?: knownSession ?: UUID.randomUUID().toString()
+                    currentSession = sessionId
+                    // Saved after the real session id is known (not before,
+                    // like it used to be) so the user's message lands in the
+                    // same chat the assistant's reply gets saved under.
+                    chatStore.appendMessage(sessionId, projectId, "user", text)
                     emit("message", JSONObject().put("requestId", requestId).put("sessionId", sessionId).put("result", result))
                 } catch (error: Exception) {
+                    val sessionId = knownSession ?: currentSession ?: UUID.randomUUID().toString()
+                    currentSession = sessionId
+                    chatStore.appendMessage(sessionId, projectId, "user", text)
                     emit("error", JSONObject().put("requestId", requestId).put("sessionId", sessionId).put("message", error.message ?: "AI request failed"))
                 }
             }
-            JsonResult.ok(JSONObject().put("accepted", true).put("requestId", requestId).put("sessionId", sessionId))
+            JsonResult.ok(JSONObject().put("accepted", true).put("requestId", requestId).put("sessionId", knownSession ?: ""))
         } catch (error: Exception) {
             JsonResult.error(error.message ?: "Invalid message request", "INVALID_REQUEST")
         }
