@@ -21,6 +21,7 @@ class RuntimeManager(private val context: Context, private val files: FileManage
     private val rootfs = File(runtimeDir, "rootfs")
     private val port = 4096
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val secureStorage = SecureStorage(context)
     @Volatile private var process: Process? = null
 
     fun architecture(): String = Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"
@@ -88,6 +89,7 @@ class RuntimeManager(private val context: Context, private val files: FileManage
         if (!proot.canExecute()) {
             return@withContext fail("Bundled proot is missing for ${architecture()}")
         }
+        writeModelFilesIntoRootfs()
         val serverCommand = "opencode serve --hostname 127.0.0.1 --port $port --print"
         process = ProcessBuilder(
             proot.absolutePath,
@@ -132,6 +134,41 @@ class RuntimeManager(private val context: Context, private val files: FileManage
         prefs.edit().putString(KEY_RUNTIME_VERSION, version).apply()
     }
 
+    fun modelConfig(): JSONObject = JSONObject()
+        .put("provider", prefs.getString(KEY_MODEL_PROVIDER, "").orEmpty())
+        .put("model", prefs.getString(KEY_MODEL_ID, "").orEmpty())
+        .put("hasApiKey", !secureStorage.get(KEY_API_KEY).isNullOrBlank())
+
+    /** Mirrors what `opencode auth login` + a hand-edited opencode.json would do. */
+    fun setModelConfig(provider: String, model: String, apiKey: String?) {
+        val cleanProvider = provider.trim()
+        if (cleanProvider.isEmpty()) throw IllegalArgumentException("Choose a provider")
+        prefs.edit()
+            .putString(KEY_MODEL_PROVIDER, cleanProvider)
+            .putString(KEY_MODEL_ID, model.trim())
+            .apply()
+        if (!apiKey.isNullOrBlank()) secureStorage.put(KEY_API_KEY, apiKey.trim())
+        writeModelFilesIntoRootfs()
+    }
+
+    private fun writeModelFilesIntoRootfs() {
+        val provider = prefs.getString(KEY_MODEL_PROVIDER, "").orEmpty()
+        if (provider.isBlank() || !rootfs.isDirectory) return
+        val model = prefs.getString(KEY_MODEL_ID, "").orEmpty()
+        val apiKey = secureStorage.get(KEY_API_KEY)
+        runCatching {
+            val configDir = File(rootfs, "root/.config/opencode").apply { mkdirs() }
+            val config = JSONObject()
+            if (model.isNotBlank()) config.put("model", "$provider/$model")
+            File(configDir, "opencode.json").writeText(config.toString(2))
+            if (!apiKey.isNullOrBlank()) {
+                val authDir = File(rootfs, "root/.local/share/opencode").apply { mkdirs() }
+                val auth = JSONObject().put(provider, JSONObject().put("type", "api").put("key", apiKey))
+                File(authDir, "auth.json").writeText(auth.toString(2))
+            }
+        }
+    }
+
     suspend fun installFromFile(source: File, expectedSha256: String): JSONObject = withContext(Dispatchers.IO) {
         val actual = sha256(source)
         require(actual.equals(expectedSha256, ignoreCase = true)) { "Runtime checksum did not match" }
@@ -170,5 +207,8 @@ class RuntimeManager(private val context: Context, private val files: FileManage
         private const val KEY_RUNTIME_VERSION = "runtime_version"
         private const val KEY_LAST_ERROR = "last_error"
         private const val KEY_LAST_OUTPUT = "last_output"
+        private const val KEY_MODEL_PROVIDER = "model_provider"
+        private const val KEY_MODEL_ID = "model_id"
+        private const val KEY_API_KEY = "model_api_key"
     }
 }
