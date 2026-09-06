@@ -4,6 +4,7 @@ import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -20,14 +21,26 @@ class OpenCodeManager(context: Context, private val files: FileManager) {
     suspend fun sendMessage(sessionId: String?, projectId: String, text: String): JSONObject =
         withContext(Dispatchers.IO) {
             require(text.trim().isNotEmpty()) { "Message cannot be empty" }
+            if (!runtime.hasApiKey()) {
+                throw IllegalStateException(
+                    "No API key configured. Please go to Settings and set your AI Model API key (e.g. Google Gemini, OpenRouter, Anthropic, or OpenAI)."
+                )
+            }
             val startupError = ensureRunning()
             if (startupError != null) throw IllegalStateException(startupError)
             val directory = files.projectDir(projectId).canonicalPath
-            // OpenCode owns session IDs. A random UUID is not a valid existing
-            // session, so the first prompt must create one through the API.
             val session = sessionId?.takeIf { it.isNotBlank() } ?: createSession(directory)
-            val body = JSONObject()
-                .put("parts", org.json.JSONArray().put(JSONObject().put("type", "text").put("text", text)))
+            val provider = runtime.currentProvider()
+            val modelName = runtime.currentModel()
+            val cleanModel = modelName.substringAfter("/")
+
+            val body = JSONObject().apply {
+                put("parts", JSONArray().put(JSONObject().put("type", "text").put("text", text)))
+                if (provider.isNotBlank() && cleanModel.isNotBlank()) {
+                    put("model", JSONObject().put("providerID", provider).put("modelID", cleanModel))
+                }
+            }
+
             val response = requireSuccess(request(
                 "POST",
                 "/session/$session/message",
@@ -36,8 +49,6 @@ class OpenCodeManager(context: Context, private val files: FileManager) {
             ))
             response
                 .put("sessionId", session)
-                // The HTTP response is { info, parts }; expose the actual
-                // assistant text so the WebView never renders raw JSON.
                 .put("reply", extractReply(response.opt("body")))
         }
 
@@ -65,13 +76,38 @@ class OpenCodeManager(context: Context, private val files: FileManager) {
     private fun requireSuccess(response: JSONObject): JSONObject {
         if (response.optBoolean("ok")) return response
         val body = response.opt("body")
-        val detail = when (body) {
-            is JSONObject -> body.optString("message")
-                .ifBlank { body.optString("_tag") }
-            is String -> body
-            else -> ""
-        }.ifBlank { "HTTP ${response.optInt("statusCode", 0)}" }
+        val status = response.optInt("statusCode", 0)
+        var detail = extractErrorDetail(body)
+        if (detail.isBlank()) {
+            detail = "HTTP $status"
+            val lastLine = runtime.lastOutput().trim()
+            if (lastLine.isNotBlank()) {
+                detail += " — Engine: $lastLine"
+            }
+        }
         throw IOException("OpenCode request failed: $detail")
+    }
+
+    private fun extractErrorDetail(body: Any?): String {
+        if (body == null) return ""
+        if (body is String) return body.trim()
+        if (body is JSONObject) {
+            for (key in listOf("message", "error", "detail", "details", "reason", "_tag")) {
+                val value = body.opt(key)
+                if (value is String && value.isNotBlank()) return value
+                if (value is JSONObject) {
+                    val nested = extractErrorDetail(value)
+                    if (nested.isNotBlank()) return nested
+                }
+            }
+            val data = body.opt("data")
+            if (data != null) {
+                val nested = extractErrorDetail(data)
+                if (nested.isNotBlank()) return nested
+            }
+            return body.toString()
+        }
+        return body.toString()
     }
 
     private fun extractReply(value: Any?): String {
@@ -89,7 +125,7 @@ class OpenCodeManager(context: Context, private val files: FileManager) {
                 val parts = value.optJSONArray("parts")
                 if (parts != null) return extractReply(parts)
             }
-            is org.json.JSONArray -> {
+            is JSONArray -> {
                 val result = buildList {
                     for (index in 0 until value.length()) {
                         val part = value.opt(index)
@@ -106,18 +142,9 @@ class OpenCodeManager(context: Context, private val files: FileManager) {
         return ""
     }
 
-    /**
-     * The opencode server can take a few seconds to bind its port after the
-     * proot process is launched. Previously chat sent one HTTP request with a
-     * 1.5s timeout and gave up ("Failed to connect"), even while the server
-     * was still starting normally. This starts the runtime if needed and
-     * polls health for up to ~25s before the caller gives up.
-     */
     private suspend fun ensureRunning(): String? {
         if (runtime.health().optBoolean("healthy")) return null
         val started = runtime.start()
-        // Probe quickly for normal starts, while retaining a generous cold-
-        // start window for first-run rootfs/auth preparation.
         repeat(10) {
             delay(500)
             if (runtime.health().optBoolean("healthy")) return null
@@ -137,12 +164,13 @@ class OpenCodeManager(context: Context, private val files: FileManager) {
 
     private fun request(method: String, path: String, body: JSONObject? = null, headers: Map<String, String> = emptyMap()): JSONObject {
         var lastError: Exception? = null
-        repeat(3) { attempt ->
+        repeat(3) {
             val connection = (URL(baseUrl + path).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
                 connectTimeout = 4000
                 readTimeout = 120_000
                 doInput = true
+                setRequestProperty("Accept", "application/json")
                 headers.forEach { (key, value) -> setRequestProperty(key, value) }
             }
             try {
