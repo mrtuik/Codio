@@ -100,7 +100,11 @@ class RuntimeManager(private val context: Context, private val files: FileManage
             .directory(File(files.rlaudeRoot, "OpenCode"))
             .redirectErrorStream(true)
             .apply {
+                environment()["HOME"] = "/root"
+                environment()["TERM"] = "dumb"
+                environment()["PATH"] = ROOTFS_PATH
                 environment()["PROOT_LOADER"] = loaderBinary().absolutePath
+                environment()["PROOT_TMP_DIR"] = context.cacheDir.absolutePath
             }
             .start()
         prefs.edit().putBoolean(KEY_RUNTIME_RUNNING, true).apply()
@@ -158,6 +162,8 @@ class RuntimeManager(private val context: Context, private val files: FileManage
     }
 
     companion object {
+        private const val ROOTFS_PATH =
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         private const val PREFS = "rlaude_runtime"
         private const val KEY_BOOTSTRAP_COMPLETE = "bootstrap_complete"
         private const val KEY_RUNTIME_RUNNING = "runtime_running"
