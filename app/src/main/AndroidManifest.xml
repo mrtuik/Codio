@@ -9,7 +9,7 @@
         android:name=".CodioApplication"
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
-        android:label="Codio"
+        android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Codio"
         android:usesCleartextTraffic="true">
