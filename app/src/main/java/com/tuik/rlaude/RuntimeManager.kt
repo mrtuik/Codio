@@ -138,6 +138,13 @@ class RuntimeManager private constructor(context: Context, private val files: Fi
             return@withContext fail("Bundled proot is missing for ${architecture()}")
         }
         writeModelFilesIntoRootfs()
+        // The rootfs's own /etc/resolv.conf, baked in at CI build time,
+        // points at the build runner's DNS — not reachable from a real
+        // device. Without a working one, every request from inside the
+        // sandbox fails to resolve OpenCode Zen's hostname before it can
+        // even connect, which is what surfaced as "Cannot connect to API:
+        // Unable to connect."
+        ensureResolvConf()
         val serverCommand = "opencode serve --hostname 127.0.0.1 --port $port"
         process = ProcessBuilder(
             proot.absolutePath,
@@ -215,6 +222,14 @@ class RuntimeManager private constructor(context: Context, private val files: Fi
             .apply()
         if (!apiKey.isNullOrBlank()) secureStorage.put(KEY_API_KEY, apiKey.trim())
         writeModelFilesIntoRootfs()
+    }
+
+    private fun ensureResolvConf() {
+        if (!rootfs.isDirectory) return
+        runCatching {
+            val etcDir = File(rootfs, "etc").apply { mkdirs() }
+            File(etcDir, "resolv.conf").writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
+        }
     }
 
     private fun writeModelFilesIntoRootfs() {
