@@ -3,11 +3,9 @@ package com.tuik.rlaude
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
 
 class WebBridge(
     private val webView: WebView,
@@ -179,8 +177,6 @@ class WebBridge(
 
     @JavascriptInterface
     fun stopGeneration(): String {
-        // Cancellation is isolated at the OpenCode transport boundary; this
-        // method remains safe even when there is no active request.
         return JsonResult.ok(JSONObject().put("stopped", true))
     }
 
@@ -301,6 +297,8 @@ class WebBridge(
     fun getDiagnostics(): String = call {
         JSONObject()
             .put("runtime", runtime.status())
+            .put("model", runtime.modelConfig())
+            .put("lastOutput", runtime.lastOutput().ifBlank { JSONObject.NULL })
             .put("storage", files.rlaudeRoot.absolutePath)
             .put("security", JSONObject()
                 .put("localhostOnly", true)
