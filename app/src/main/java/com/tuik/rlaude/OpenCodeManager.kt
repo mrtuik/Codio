@@ -6,7 +6,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.UUID
 
 /**
  * Talks to the local OpenCode HTTP server. Takes the app-wide RuntimeManager
@@ -32,18 +31,25 @@ class OpenCodeManager(private val runtime: RuntimeManager, private val files: Fi
                         " Check Settings › Runtime, or Diagnostics."
                 )
             }
-            val session = sessionId ?: UUID.randomUUID().toString()
+            val headers = mapOf("x-rlaude-directory" to files.projectDir(projectId).absolutePath)
+            // The server assigns session ids itself via POST /session — posting
+            // straight to /session/{a-uuid-we-made-up}/message hits a session
+            // that was never created, which is what produced the generic
+            // "UnknownError: Unexpected server error" on every single message.
+            val session = sessionId ?: createSession(headers)
             val body = JSONObject()
-                .put("sessionID", session)
                 .put("parts", org.json.JSONArray().put(JSONObject().put("type", "text").put("text", text)))
-            val response = request(
-                "POST",
-                "/session/$session/message",
-                body,
-                mapOf("x-rlaude-directory" to files.projectDir(projectId).absolutePath)
-            )
+            val response = request("POST", "/session/$session/message", body, headers)
             response.put("sessionId", session)
         }
+
+    private fun createSession(headers: Map<String, String>): String {
+        val response = request("POST", "/session", JSONObject(), headers)
+        val body = response.opt("body") as? JSONObject
+        val id = body?.optString("id").orEmpty()
+        if (id.isBlank()) throw IllegalStateException("The coding engine did not return a session id")
+        return id
+    }
 
     suspend fun restart(): JSONObject {
         runtime.stop()
