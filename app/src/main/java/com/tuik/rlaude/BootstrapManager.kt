@@ -283,7 +283,7 @@ class BootstrapManager(private val context: Context) {
             else -> {
                 Files.createDirectories(target.parent)
                 Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING)
-                if (entry.mode and 0o111 != 0) {
+                if (entry.mode and 0x49 != 0) {
                     target.toFile().setExecutable(true, false)
                 }
             }
