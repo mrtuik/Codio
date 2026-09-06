@@ -138,7 +138,7 @@ class RuntimeManager private constructor(context: Context, private val files: Fi
             return@withContext fail("Bundled proot is missing for ${architecture()}")
         }
         writeModelFilesIntoRootfs()
-        val serverCommand = "opencode serve --hostname 127.0.0.1 --port $port --print"
+        val serverCommand = "opencode serve --hostname 127.0.0.1 --port $port"
         process = ProcessBuilder(
             proot.absolutePath,
             "--link2symlink", "-0",
