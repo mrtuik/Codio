@@ -162,10 +162,18 @@ class RuntimeManager private constructor(context: Context, private val files: Fi
         prefs.edit().putString(KEY_LAST_OUTPUT, "").apply()
         val launched = process
         thread(name = "rlaude-opencode-output", isDaemon = true) {
+            // Keep a rolling window of recent lines, not just the single last
+            // one — a stack trace opencode prints for a real request error is
+            // many lines long, and overwriting on every line was throwing the
+            // actual error away, leaving only whatever line happened to print
+            // right after it. This is what made every past fix attempt a
+            // guess instead of reading the real error.
+            val recent = ArrayDeque<String>()
             runCatching {
                 launched?.inputStream?.bufferedReader()?.forEachLine { line ->
-                    // Keep only a short, redacted diagnostic tail. Chat uses HTTP.
-                    prefs.edit().putString(KEY_LAST_OUTPUT, redact(line).take(500)).apply()
+                    recent.addLast(redact(line))
+                    while (recent.size > 80) recent.removeFirst()
+                    prefs.edit().putString(KEY_LAST_OUTPUT, recent.joinToString("\n").take(8000)).apply()
                 }
             }
             prefs.edit().putBoolean(KEY_RUNTIME_RUNNING, false).apply()
