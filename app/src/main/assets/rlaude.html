@@ -320,18 +320,19 @@
   function stopRuntime(){const r=bridge('stopRuntime');toast(r.ok?'Runtime stopped.':r.error?.message||'Could not stop runtime');setTimeout(loadRuntime,500)}
   function loadRuntime(){const r=bridge('getRuntimeStatus'),d=r.data||{};const good=!!d.running||!!d.health?.healthy;['top-dot','side-dot'].forEach(id=>$(id).className='dot '+(good?'ok':d.installed?'':'bad'));$('top-runtime').textContent=good?'Runtime ready':d.installed?'Installed · stopped':'Offline';$('side-runtime').textContent=good?'Runtime ready':d.installed?'Runtime stopped':'Offline';$('settings-runtime').textContent=(d.installed?'Runtime package detected':'Runtime package not installed')+' · '+(d.architecture||'unknown')}
   function loadDiagnostics(){const r=bridge('getDiagnostics'),d=r.data||{};const safe=JSON.stringify(d,null,2);$('diagnostics-content').innerHTML='<div class="notice"><span>●</span><span>Secrets and credentials are intentionally excluded from diagnostics.</span></div><div class="editor-shell"><pre style="padding:15px;margin:0;white-space:pre-wrap;color:var(--muted);font:11px/1.6 var(--font)">'+escape(safe)+'</pre></div><button class="ghost" style="width:max-content" onclick="navigator.clipboard?.writeText('+JSON.stringify(safe)+');toast(\'Diagnostics copied\')">Copy diagnostics</button>'}
-  function onProviderChange(){$('model-provider-custom').style.display=$('model-provider').value==='custom'?'block':'none'}
+  function onProviderChange(){const v=$('model-provider').value;const zen=v==='opencode';$('model-provider-custom').style.display=v==='custom'?'block':'none';$('model-api-key').style.display=zen?'none':'block';if(zen){$('model-api-key').value='';$('model-state').textContent='OpenCode Zen — free, no API key needed.'}}
   function loadModelConfig(){
     const r=bridge('getModelConfig'); if(!r.ok) return; const d=r.data||{};
     const known=['anthropic','openai','google','openrouter','github-copilot','opencode'];
     if(d.provider&&!known.includes(d.provider)){$('model-provider').value='custom';$('model-provider-custom').style.display='block';$('model-provider-custom').value=d.provider}
     else if(d.provider){$('model-provider').value=d.provider}
     $('model-id').value=d.model||'';
-    $('model-state').textContent=d.provider?('Using '+d.provider+(d.model?'/'+d.model:' (default model)')+(d.hasApiKey?' · API key saved':' · no API key yet')):'Choose the provider OpenCode should use and add its API key.';
+    $('model-state').textContent=d.provider==='opencode'?'OpenCode Zen — free, no API key needed.':(d.provider?('Using '+d.provider+(d.model?'/'+d.model:' (default model)')+(d.hasApiKey?' · API key saved':' · no API key yet')):'Choose the provider OpenCode should use and add its API key.');
+    onProviderChange();
   }
   function saveModelConfig(){
     const provider=($('model-provider').value==='custom'?$('model-provider-custom').value:$('model-provider').value).trim();
-    const model=$('model-id').value.trim(), apiKey=$('model-api-key').value.trim();
+    const model=$('model-id').value.trim(), apiKey=provider==='opencode'?'':$('model-api-key').value.trim();
     if(!provider){toast('Choose a provider');return}
     const r=bridge('setModelConfig',{provider,model,apiKey});
     if(!r.ok){toast(r.error?.message||'Could not save model config');return}
