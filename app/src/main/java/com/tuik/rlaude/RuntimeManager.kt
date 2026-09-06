@@ -223,7 +223,13 @@ class RuntimeManager private constructor(context: Context, private val files: Fi
             val configDir = File(rootfs, "root/.config/opencode").apply { mkdirs() }
             val configFile = File(configDir, "opencode.json")
             if (model.isNotBlank()) {
-                configFile.writeText(JSONObject().put("model", "$provider/$model").toString(2))
+                // Defensive: if the model id already looks fully-qualified
+                // (contains a "/"), don't double up the provider prefix —
+                // typing "opencode/big-pickle" into the model field used to
+                // become "opencode/opencode/big-pickle" and silently broke
+                // every message.
+                val qualified = if (model.contains("/")) model else "$provider/$model"
+                configFile.writeText(JSONObject().put("model", qualified).toString(2))
             } else if (configFile.exists()) {
                 configFile.delete()
             }
