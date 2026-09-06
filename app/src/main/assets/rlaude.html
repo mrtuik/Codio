@@ -251,6 +251,30 @@
     try { return parse(payload === undefined ? native[method]() : native[method](JSON.stringify(payload))) }
     catch (e) { return {ok:false,error:{message:e.message}} }
   }
+  // The opencode server replies to POST /session/:id/message with
+  // { info: Message, parts: Part[] } — the actual reply text lives in the
+  // "text"-type entries of `parts`, not in a top-level "message"/"content"
+  // field. Looking for those fields (as the old code did) always missed,
+  // so every reply fell through to a raw JSON.stringify dump of the whole
+  // response object instead of the model's actual answer.
+  function extractReplyText(body) {
+    if (body == null) return 'The coding engine returned an empty response.';
+    if (typeof body === 'string') return body.trim() ? body : 'The coding engine returned an empty response.';
+    if (typeof body !== 'object') return String(body);
+    const parts = Array.isArray(body.parts) ? body.parts : [];
+    const fromParts = parts
+      .filter(p => p && p.type === 'text' && typeof p.text === 'string' && p.text.trim())
+      .map(p => p.text).join('\n\n').trim();
+    if (fromParts) return fromParts;
+    const err = body.info && body.info.error;
+    if (err) {
+      const msg = (err.data && (err.data.message || err.data.error)) || err.message || (typeof err === 'string' ? err : null);
+      if (msg) return '**The coding engine reported an error:** ' + msg;
+    }
+    if (typeof body.message === 'string' && body.message) return body.message;
+    if (typeof body.content === 'string' && body.content) return body.content;
+    return 'The coding engine returned an empty response.';
+  }
   window.RlaudeNative = { onEvent(raw) {
     const event = parse(raw); if (!event) return;
     if (event.type === 'bootstrap') {
@@ -259,9 +283,7 @@
       const result = event.payload && event.payload.result;
       const sid = event.payload && event.payload.sessionId;
       state.pending = false; renderPending();
-      let text = result && result.body;
-      if (text && typeof text === 'object') text = text.message || text.content || JSON.stringify(text, null, 2);
-      const display = typeof text === 'string' && text ? text : 'The coding engine returned an empty response.';
+      const display = extractReplyText(result && result.body);
       appendMessage('ai', display);
       loadRuntime();
       if (sid) { bridge('saveAssistantReply', {sessionId:sid, projectId:state.project?.id||'', text:display}); loadChatSessions(); }
