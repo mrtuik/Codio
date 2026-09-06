@@ -263,12 +263,14 @@
       if (text && typeof text === 'object') text = text.message || text.content || JSON.stringify(text, null, 2);
       const display = typeof text === 'string' && text ? text : 'The coding engine returned an empty response.';
       appendMessage('ai', display);
+      loadRuntime();
       if (sid) { bridge('saveAssistantReply', {sessionId:sid, projectId:state.project?.id||'', text:display}); loadChatSessions(); }
     } else if (event.type === 'error') {
       const sid = event.payload && event.payload.sessionId;
       state.pending = false; renderPending();
       const display = '**Request failed:** ' + (event.payload.message || 'Unknown error');
       appendMessage('ai', display);
+      loadRuntime();
       if (sid) { bridge('saveAssistantReply', {sessionId:sid, projectId:state.project?.id||'', text:display}); loadChatSessions(); }
     } else if (event.type === 'runtime') { loadRuntime(); }
     else if (event.type === 'fileAttached') {
