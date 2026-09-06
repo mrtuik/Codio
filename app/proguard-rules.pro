@@ -1,1 +1,0 @@
-# Rlaude keeps the native bridge names through @JavascriptInterface.
