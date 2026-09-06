@@ -8,8 +8,6 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import java.security.MessageDigest
-import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /**
@@ -78,11 +76,11 @@ class RuntimeManager(private val context: Context, private val files: FileManage
     }
 
     fun defaultModelFor(provider: String): String = when (provider.lowercase()) {
+        "opencode" -> "big-pickle"
         "google" -> "gemini-2.0-flash"
         "openrouter" -> "anthropic/claude-3.5-sonnet"
         "anthropic" -> "claude-3-5-sonnet-20241022"
         "openai" -> "gpt-4o"
-        "opencode" -> "claude-3-5-sonnet"
         else -> ""
     }
 
@@ -92,6 +90,10 @@ class RuntimeManager(private val context: Context, private val files: FileManage
     fun currentModel(): String {
         val saved = prefs.getString(KEY_MODEL_ID, "").orEmpty().trim()
         return saved.ifBlank { defaultModelFor(currentProvider()) }
+    }
+
+    fun isKeyRequired(provider: String = currentProvider()): Boolean {
+        return provider.lowercase() != "opencode"
     }
 
     fun hasApiKey(): Boolean = !secureStorage.get(KEY_API_KEY).isNullOrBlank()
@@ -112,12 +114,12 @@ class RuntimeManager(private val context: Context, private val files: FileManage
             return@withContext fail("Bundled proot is missing for ${architecture()}")
         }
 
-        // 1. Ensure storage directory exists inside guest rootfs for bind-mounting
+        // 1. Ensure storage directory exists inside guest rootfs so proot can bind-mount it
         val guestMount = File(rootfs, files.rlaudeRoot.absolutePath.removePrefix("/"))
         guestMount.mkdirs()
         File(rootfs, "tmp").mkdirs()
 
-        // 2. Configure DNS and hosts inside guest rootfs so network calls resolve
+        // 2. Configure DNS so OpenCode can resolve opencode.ai and AI model hosts
         val etcDir = File(rootfs, "etc").apply { mkdirs() }
         File(etcDir, "resolv.conf").writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\nnameserver 8.8.4.4\n")
         val hostsFile = File(etcDir, "hosts")
@@ -199,6 +201,7 @@ class RuntimeManager(private val context: Context, private val files: FileManage
         .put("provider", currentProvider())
         .put("model", currentModel())
         .put("hasApiKey", hasApiKey())
+        .put("isKeyRequired", isKeyRequired())
 
     fun setModelConfig(provider: String, model: String, apiKey: String?) {
         val cleanProvider = provider.trim()
@@ -259,6 +262,6 @@ class RuntimeManager(private val context: Context, private val files: FileManage
         private const val KEY_MODEL_PROVIDER = "model_provider"
         private const val KEY_MODEL_ID = "model_id"
         private const val KEY_API_KEY = "model_api_key"
-        private const val DEFAULT_PROVIDER = "google"
+        private const val DEFAULT_PROVIDER = "opencode"
     }
 }
