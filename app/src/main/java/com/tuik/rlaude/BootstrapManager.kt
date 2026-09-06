@@ -14,6 +14,8 @@ import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.CompletableFuture
+import java.util.zip.GZIPInputStream
 import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
@@ -215,33 +217,71 @@ class BootstrapManager(private val context: Context) {
         }
     }
 
+    /**
+     * Android's toybox tar cannot decompress gzip on its own — its -z flag
+     * shells out to a gzip binary that many devices do not ship. Decompress
+     * with GZIPInputStream in-process and pipe a plain tar stream to
+     * /system/bin/tar instead, which every Android build supports.
+     */
+    private fun runTarWithGzipStdin(
+        archive: File,
+        timeoutSeconds: Long,
+        vararg args: String,
+        onStdoutLine: ((String) -> Unit)? = null
+    ): String {
+        val process = ProcessBuilder("/system/bin/tar", *args)
+            .redirectErrorStream(false)
+            .start()
+        val stderrFuture = CompletableFuture.supplyAsync {
+            readLimited(process.errorStream, 2_000)
+        }
+        val stdoutFuture = CompletableFuture.supplyAsync {
+            val collected = StringBuilder()
+            process.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    if (onStdoutLine != null) onStdoutLine(line)
+                    else if (collected.length < 2_000) collected.appendLine(line)
+                }
+            }
+            collected.toString()
+        }
+        val feedError = runCatching {
+            GZIPInputStream(archive.inputStream().buffered(64 * 1024)).use { gzip ->
+                process.outputStream.use { stdin -> gzip.copyTo(stdin, 64 * 1024) }
+            }
+        }.exceptionOrNull()
+        if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            throw IOException("tar ${args.firstOrNull().orEmpty()} timed out")
+        }
+        val stderr = stderrFuture.get(5, TimeUnit.SECONDS)
+        val stdout = stdoutFuture.get(5, TimeUnit.SECONDS)
+        if (feedError != null) {
+            throw IOException("Could not decompress runtime archive: ${feedError.message}")
+        }
+        if (process.exitValue() != 0) {
+            throw IOException(stderr.ifBlank { stdout }.ifBlank { "tar exited ${process.exitValue()}" })
+        }
+        return stdout
+    }
+
     private fun extractArchive(archive: File) {
         val rootfs = runtime.rootfsDirectory()
         rootfs.deleteRecursively()
         rootfs.mkdirs()
-        val listing = ProcessBuilder("/system/bin/tar", "-tzf", archive.absolutePath)
-            .redirectErrorStream(true).start()
         var unsafeEntry = false
-        listing.inputStream.bufferedReader().useLines { lines ->
-            lines.forEach { name ->
-                if (name.startsWith("/") || name.split("/").contains("..")) {
-                    unsafeEntry = true
-                }
+        runTarWithGzipStdin(archive, 180, "-t") { name ->
+            if (name.startsWith("/") || name.split("/").contains("..")) {
+                unsafeEntry = true
             }
         }
-        if (!listing.waitFor(60, TimeUnit.SECONDS)) {
-            listing.destroyForcibly()
-            throw IOException("Runtime archive listing timed out")
-        }
-        if (listing.exitValue() != 0 || unsafeEntry) {
+        if (unsafeEntry) {
             throw IOException("Runtime archive failed safety validation")
         }
-        val extract = ProcessBuilder(
-            "/system/bin/tar", "-xzf", archive.absolutePath, "-C", rootfs.absolutePath
-        ).redirectErrorStream(true).start()
-        val output = readLimited(extract.inputStream, 2_000)
-        if (!extract.waitFor(120, TimeUnit.SECONDS) || extract.exitValue() != 0) {
-            throw IOException("Runtime extraction failed: $output")
+        try {
+            runTarWithGzipStdin(archive, 600, "-x", "-C", rootfs.absolutePath)
+        } catch (error: IOException) {
+            throw IOException("Runtime extraction failed: ${error.message}")
         }
         repairAbsoluteSymlinks(rootfs)
         val shell = File(rootfs, "bin/sh")
