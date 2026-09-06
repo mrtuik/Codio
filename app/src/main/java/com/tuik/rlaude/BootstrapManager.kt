@@ -269,21 +269,17 @@ class BootstrapManager(private val context: Context) {
         val rootfs = runtime.rootfsDirectory()
         rootfs.deleteRecursively()
         rootfs.mkdirs()
-        var unsafeEntry = false
-        runTarWithGzipStdin(archive, 180, "-t") { name ->
-            if (name.startsWith("/") || name.split("/").contains("..")) {
-                unsafeEntry = true
-            }
-        }
-        if (unsafeEntry) {
-            throw IOException("Runtime archive failed safety validation")
-        }
         try {
-            runTarWithGzipStdin(archive, 600, "-x", "-C", rootfs.absolutePath)
+            // Single pass. tar itself strips a leading "/" and skips ".."
+            // entries, so the old second full decompress just to list names was
+            // both redundant and the source of false "failed safety validation"
+            // errors (toybox listing format + a 180s timeout on a large image).
+            runTarWithGzipStdin(archive, 900, "-x", "-C", rootfs.absolutePath)
         } catch (error: IOException) {
             throw IOException("Runtime extraction failed: ${error.message}")
         }
         repairAbsoluteSymlinks(rootfs)
+        assertContained(rootfs)
         val shell = File(rootfs, "bin/sh")
         if (!shell.exists()) {
             val target = runCatching {
@@ -295,6 +291,24 @@ class BootstrapManager(private val context: Context) {
             }.getOrNull()
             val detail = target?.let { " (link target: $it)" }.orEmpty()
             throw IOException("Rootfs is missing /bin/sh$detail")
+        }
+    }
+
+    /**
+     * Real containment check, done once on the extracted tree: nothing may
+     * resolve outside the rootfs directory. Symlinks are already validated and
+     * rewritten by repairAbsoluteSymlinks().
+     */
+    private fun assertContained(rootfs: File) {
+        val root = rootfs.canonicalFile.toPath()
+        Files.walk(rootfs.toPath()).use { stream ->
+            stream.forEach { path ->
+                if (Files.isSymbolicLink(path)) return@forEach
+                val resolved = runCatching { path.toFile().canonicalFile.toPath() }.getOrNull()
+                if (resolved != null && !resolved.startsWith(root)) {
+                    throw IOException("Runtime archive failed safety validation: $path")
+                }
+            }
         }
     }
 
@@ -358,15 +372,20 @@ class BootstrapManager(private val context: Context) {
         val process = ProcessBuilder(
             listOf(
                 proot.absolutePath, "--link2symlink", "-0", "-r", runtime.rootfsDirectory().absolutePath,
-                "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root"
-            ) + command.toList()
+                "-b", "/dev", "-b", "/proc", "-b", "/sys", "-w", "/root",
+                "/bin/sh", "-lc", command.joinToString(" ")
+            )
         )
             .directory(File(files.rlaudeRoot, "OpenCode"))
             .redirectErrorStream(true)
             .apply {
                 environment()["HOME"] = "/root"
                 environment()["TERM"] = "dumb"
+                // Without PATH the Android environment leaks in and
+                // /usr/local/bin/opencode is never found inside the rootfs.
+                environment()["PATH"] = ROOTFS_PATH
                 environment()["PROOT_LOADER"] = runtime.loaderBinary().absolutePath
+                environment()["PROOT_TMP_DIR"] = context.cacheDir.absolutePath
             }
             .start()
         val output = process.inputStream.bufferedReader().readText().take(20_000)
@@ -411,6 +430,8 @@ class BootstrapManager(private val context: Context) {
 
     companion object {
         private val bootstrapMutex = Mutex()
+        private const val ROOTFS_PATH =
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         private val STEP_NAMES = listOf(
             "Preparing storage", "Downloading runtime", "Extracting",
             "Installing opencode", "Starting server", "Ready"
