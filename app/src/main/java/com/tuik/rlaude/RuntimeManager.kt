@@ -212,24 +212,28 @@ class RuntimeManager private constructor(context: Context, private val files: Fi
     private fun writeModelFilesIntoRootfs() {
         if (!rootfs.isDirectory) return
         val provider = effectiveProvider()
-        // OpenCode Zen still needs *a* model id server-side — an empty model
-        // with only a provider name was answering every chat request with a
-        // generic "Unexpected server error" once the server itself came up.
+        // Real opencode needs no config to pick *a* working model, but an
+        // earlier build here forced a guessed, invalid model id into
+        // opencode.json and broke every message. Now we use a model id
+        // confirmed working directly on-device via Termux instead of guessing.
         val model = prefs.getString(KEY_MODEL_ID, "").orEmpty()
             .ifBlank { if (provider == DEFAULT_PROVIDER) DEFAULT_MODEL else "" }
         val apiKey = secureStorage.get(KEY_API_KEY)
         runCatching {
             val configDir = File(rootfs, "root/.config/opencode").apply { mkdirs() }
-            val config = JSONObject()
-            if (model.isNotBlank()) config.put("model", "$provider/$model")
-            File(configDir, "opencode.json").writeText(config.toString(2))
-            // OpenCode Zen (the "opencode" provider) is free and works with no
-            // key at all — opencode falls back to a public key for it on its
-            // own. Only write auth.json for providers that actually need one.
-            if (provider != DEFAULT_PROVIDER && !apiKey.isNullOrBlank()) {
-                val authDir = File(rootfs, "root/.local/share/opencode").apply { mkdirs() }
+            val configFile = File(configDir, "opencode.json")
+            if (model.isNotBlank()) {
+                configFile.writeText(JSONObject().put("model", "$provider/$model").toString(2))
+            } else if (configFile.exists()) {
+                configFile.delete()
+            }
+            val authDir = File(rootfs, "root/.local/share/opencode").apply { mkdirs() }
+            val authFile = File(authDir, "auth.json")
+            if (!apiKey.isNullOrBlank()) {
                 val auth = JSONObject().put(provider, JSONObject().put("type", "api").put("key", apiKey))
-                File(authDir, "auth.json").writeText(auth.toString(2))
+                authFile.writeText(auth.toString(2))
+            } else if (authFile.exists()) {
+                authFile.delete()
             }
         }
     }
@@ -275,8 +279,8 @@ class RuntimeManager private constructor(context: Context, private val files: Fi
         /** Provider id used by default — OpenCode Zen, free, no API key required. */
         const val DEFAULT_PROVIDER = "opencode"
 
-        /** Known-free OpenCode Zen model id, used when no model is explicitly set. */
-        const val DEFAULT_MODEL = "grok-code-fast-1"
+        /** Confirmed-working free OpenCode Zen model (verified via Termux). */
+        const val DEFAULT_MODEL = "big-pickle"
 
         private const val ROOTFS_PATH =
             "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
