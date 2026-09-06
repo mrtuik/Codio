@@ -27,6 +27,7 @@ jobs:
           docker run \
             --platform linux/arm64 \
             --user 0:0 \
+            --env QEMU_CPU=max \
             --rm \
             -v "${GITHUB_WORKSPACE}/dist:/out" \
             node:20-alpine \
