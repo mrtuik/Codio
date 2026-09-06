@@ -20,11 +20,8 @@ class OpenCodeManager(context: Context, private val files: FileManager) {
     suspend fun sendMessage(sessionId: String?, projectId: String, text: String): JSONObject =
         withContext(Dispatchers.IO) {
             require(text.trim().isNotEmpty()) { "Message cannot be empty" }
-            if (!ensureRunning()) {
-                throw IllegalStateException(
-                    "The on-device coding engine didn't start in time. Check Settings › Runtime, or Diagnostics."
-                )
-            }
+            val startupError = ensureRunning()
+            if (startupError != null) throw IllegalStateException(startupError)
             val session = sessionId ?: UUID.randomUUID().toString()
             val body = JSONObject()
                 .put("sessionID", session)
@@ -50,14 +47,27 @@ class OpenCodeManager(context: Context, private val files: FileManager) {
      * was still starting normally. This starts the runtime if needed and
      * polls health for up to ~25s before the caller gives up.
      */
-    private suspend fun ensureRunning(): Boolean {
-        if (runtime.health().optBoolean("healthy")) return true
-        runtime.start()
-        repeat(25) {
-            delay(1000)
-            if (runtime.health().optBoolean("healthy")) return true
+    private suspend fun ensureRunning(): String? {
+        if (runtime.health().optBoolean("healthy")) return null
+        val started = runtime.start()
+        // The first start also writes rootfs config and may run a silent
+        // provider login, so give it a longer grace period before polling
+        // aggressively: ~10s of slow polls, then ~50s of 1s polls.
+        repeat(5) {
+            delay(2000)
+            if (runtime.health().optBoolean("healthy")) return null
         }
-        return false
+        repeat(50) {
+            delay(1000)
+            if (runtime.health().optBoolean("healthy")) return null
+        }
+        val output = runtime.lastOutput().ifBlank { "(no output from the opencode process yet)" }
+        val reason = started.optString("reason").ifBlank { runtime.lastError() }
+        return buildString {
+            append("The on-device coding engine didn't become healthy.")
+            if (reason.isNotBlank()) append(" Reason: ").append(reason).append(".")
+            append(" Last engine output: ").append(output)
+        }
     }
 
     private fun request(method: String, path: String, body: JSONObject? = null, headers: Map<String, String> = emptyMap()): JSONObject {
