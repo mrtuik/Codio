@@ -21,16 +21,16 @@ class OpenCodeManager(context: Context, private val files: FileManager) {
     suspend fun sendMessage(sessionId: String?, projectId: String, text: String): JSONObject =
         withContext(Dispatchers.IO) {
             require(text.trim().isNotEmpty()) { "Message cannot be empty" }
-            if (!runtime.hasApiKey()) {
+            val provider = runtime.currentProvider()
+            if (runtime.isKeyRequired(provider) && !runtime.hasApiKey()) {
                 throw IllegalStateException(
-                    "No API key configured. Please go to Settings and set your AI Model API key (e.g. Google Gemini, OpenRouter, Anthropic, or OpenAI)."
+                    "Please set your API key for $provider in Settings to start chatting."
                 )
             }
             val startupError = ensureRunning()
             if (startupError != null) throw IllegalStateException(startupError)
             val directory = files.projectDir(projectId).canonicalPath
             val session = sessionId?.takeIf { it.isNotBlank() } ?: createSession(directory)
-            val provider = runtime.currentProvider()
             val modelName = runtime.currentModel()
             val cleanModel = modelName.substringAfter("/")
 
