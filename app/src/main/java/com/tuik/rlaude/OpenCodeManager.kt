@@ -50,14 +50,13 @@ class OpenCodeManager(context: Context, private val files: FileManager) {
     private suspend fun ensureRunning(): String? {
         if (runtime.health().optBoolean("healthy")) return null
         val started = runtime.start()
-        // The first start also writes rootfs config and may run a silent
-        // provider login, so give it a longer grace period before polling
-        // aggressively: ~10s of slow polls, then ~50s of 1s polls.
-        repeat(5) {
-            delay(2000)
+        // Probe quickly for normal starts, while retaining a generous cold-
+        // start window for first-run rootfs/auth preparation.
+        repeat(10) {
+            delay(500)
             if (runtime.health().optBoolean("healthy")) return null
         }
-        repeat(50) {
+        repeat(45) {
             delay(1000)
             if (runtime.health().optBoolean("healthy")) return null
         }
