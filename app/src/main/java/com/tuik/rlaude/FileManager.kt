@@ -27,7 +27,7 @@ class FileManager(context: Context) {
 
     fun projects(): JSONArray {
         val result = JSONArray()
-        projectsRoot.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name.lowercase() }
+        projectsRoot.listFiles()?.filter { it.isDirectory && !it.name.startsWith(".") }?.sortedBy { it.name.lowercase() }
             ?.forEach { directory ->
                 result.put(
                     JSONObject()
@@ -63,6 +63,17 @@ class FileManager(context: Context) {
         }
         if (initializeGit) GitManager.run(directory, listOf("init"))
         return JSONObject().put("id", cleanName).put("name", cleanName).put("template", template)
+    }
+
+    /** Silent workspace used when the user just wants to chat without picking a project first. */
+    fun ensureDefaultProject(): JSONObject {
+        val id = ".chat"
+        val directory = projectDir(id)
+        if (!directory.exists()) {
+            directory.mkdirs()
+            File(directory, "README.md").writeText("# Chat\n\nDefault workspace used for quick chats.\n")
+        }
+        return JSONObject().put("id", id).put("name", "Chat").put("template", "blank")
     }
 
     fun renameProject(projectId: String, newName: String): JSONObject {
