@@ -39,6 +39,7 @@ jobs:
               # through proot, /bin/sh resolves against the phone's /bin.
               # Rewrite every absolute symlink in the archive to a relative
               # link, not just the three top-level directories.
+              cd /
               find bin sbin lib usr etc root -type l -print | while IFS= read -r link; do
                 target="$(readlink "$link")"
                 case "$target" in
